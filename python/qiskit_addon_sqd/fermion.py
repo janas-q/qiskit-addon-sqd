@@ -170,6 +170,7 @@ def diagonalize_fermionic_hamiltonian(
     carryover_threshold: float = 1e-4,
     callback: Callable[[list[SCIResult]], None] | None = None,
     seed: int | np.random.Generator | None = None,
+    shake: bool = False
 ) -> SCIResult:
     """Run the sample-based quantum diagonalization (SQD) algorithm.
 
@@ -316,8 +317,19 @@ def diagonalize_fermionic_hamiltonian(
             # If we do have average orbital occupancy information, use it to refine the
             # full set of noisy configurations
             bitstrings, probs = recover_configurations(
-                raw_bitstrings, raw_probs, current_occupancies, n_alpha, n_beta, rand_seed=rng
+                raw_bitstrings,
+                raw_probs,
+                current_occupancies,
+                n_alpha,
+                n_beta,
+                rand_seed=rng,
+                shake=shake
             )
+
+
+        # from devtools import debug
+        # debug(bitstrings[:, :norb].astype(np.int8).sum(axis=1))
+        # # debug(norb)
 
         # Subsample batches of bitstrings
         subsamples = subsample(

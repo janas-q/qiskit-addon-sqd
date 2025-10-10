@@ -63,6 +63,7 @@ def recover_configurations(
     num_elec_a: int,
     num_elec_b: int,
     rand_seed: np.random.Generator | int | None = None,
+    shake: bool = False
 ) -> tuple[np.ndarray, np.ndarray]:
     """Refine bitstrings based on average orbital occupancy and a target hamming weight.
 
@@ -112,13 +113,28 @@ def recover_configurations(
     corrected_dict: defaultdict[str, float] = defaultdict(float)
     occs_array = np.flip(avg_occupancies).flatten()
     for bitstring, freq in zip(bitstring_matrix, probabilities):
-        bs_corrected = _bipartite_bitstring_correcting(
-            bitstring,
-            occs_array,
-            num_elec_a,
-            num_elec_b,
-            rng=rng,
-        )
+        if shake == True:
+            bs_shaken = _give_it_a_shake(bitstring,
+                occs_array,
+                num_elec_a,
+                num_elec_b,
+                rng=rng,
+            )
+            bs_corrected = _bipartite_bitstring_correcting(
+                bs_shaken,
+                occs_array,
+                num_elec_a,
+                num_elec_b,
+                rng=rng,
+            )
+        else:
+            bs_corrected = _bipartite_bitstring_correcting(
+                bitstring,
+                occs_array,
+                num_elec_a,
+                num_elec_b,
+                rng=rng,
+            )
         bs_str = "".join("1" if bit else "0" for bit in bs_corrected)
         corrected_dict[bs_str] += freq
     bs_mat_out = np.array([[bit == "1" for bit in bs] for bs in corrected_dict])
@@ -298,6 +314,63 @@ def _bipartite_bitstring_correcting(
         )
         bit_array[partition_size:][indices_to_flip] = np.logical_not(
             bit_array[partition_size:][indices_to_flip]
+        )
+
+    return bit_array
+
+
+def _give_it_a_shake(
+    bit_array: np.ndarray,
+    avg_occupancies: np.ndarray,
+    hamming_right: int,
+    hamming_left: int,
+    rng: np.random.Generator,
+    shake_prob: float = .25
+) -> np.ndarray:
+    # This function must not mutate the input arrays.
+    bit_array = bit_array.copy()
+
+    # The number of bits should be even
+    num_bits = bit_array.shape[0]
+    partition_size = num_bits // 2
+
+    # Get the probability of flipping each bit, separated into LEFT and RIGHT subsystems,
+    # based on the avg occupancy of each bit and the target hamming weight
+    probs_left = np.zeros(partition_size)
+    probs_right = np.zeros(partition_size)
+    for i in range(partition_size):
+        if bit_array[i]:
+            probs_left[i] = _p_flip_1_to_0(hamming_left / partition_size, avg_occupancies[i], 0.01)
+        else:
+            probs_left[i] = _p_flip_0_to_1(hamming_left / partition_size, avg_occupancies[i], 0.01)
+
+        if bit_array[i + partition_size]:
+            probs_right[i] = _p_flip_1_to_0(
+                hamming_right / partition_size, avg_occupancies[i + partition_size], 0.01
+            )
+        else:
+            probs_right[i] = _p_flip_0_to_1(
+                hamming_right / partition_size, avg_occupancies[i + partition_size], 0.01
+            )
+
+    # Normalize
+    probs_left = np.absolute(probs_left)
+    probs_right = np.absolute(probs_right)
+    probs_left = probs_left / np.sum(probs_left)
+    probs_right = probs_right / np.sum(probs_right)
+
+
+    if rng.random() < shake_prob:
+        # Shake LEFT bits
+        indices_to_flip_left = rng.random(size=len(probs_left)) < probs_left
+        bit_array[:partition_size][indices_to_flip_left] = np.logical_not(
+            bit_array[:partition_size][indices_to_flip_left]
+        )
+
+        # Shake RIGHT bits
+        indices_to_flip_right = rng.random(size=len(probs_right)) < probs_right
+        bit_array[partition_size:][indices_to_flip_right] = np.logical_not(
+            bit_array[partition_size:][indices_to_flip_right]
         )
 
     return bit_array

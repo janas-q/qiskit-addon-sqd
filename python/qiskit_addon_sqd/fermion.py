@@ -170,7 +170,8 @@ def diagonalize_fermionic_hamiltonian(
     carryover_threshold: float = 1e-4,
     callback: Callable[[list[SCIResult]], None] | None = None,
     seed: int | np.random.Generator | None = None,
-    shake: bool = False
+    shake: bool = False,
+    shake_prob: float = .25
 ) -> SCIResult:
     """Run the sample-based quantum diagonalization (SQD) algorithm.
 
@@ -323,7 +324,8 @@ def diagonalize_fermionic_hamiltonian(
                 n_alpha,
                 n_beta,
                 rand_seed=rng,
-                shake=shake
+                shake=shake,
+                shake_prob=shake_prob
             )
 
 

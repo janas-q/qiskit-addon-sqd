@@ -63,7 +63,8 @@ def recover_configurations(
     num_elec_a: int,
     num_elec_b: int,
     rand_seed: np.random.Generator | int | None = None,
-    shake: bool = False
+    shake: bool = False,
+    shake_prob: float = .25
 ) -> tuple[np.ndarray, np.ndarray]:
     """Refine bitstrings based on average orbital occupancy and a target hamming weight.
 
@@ -119,6 +120,7 @@ def recover_configurations(
                 num_elec_a,
                 num_elec_b,
                 rng=rng,
+                shake_prob=shake_prob
             )
             bs_corrected = _bipartite_bitstring_correcting(
                 bs_shaken,

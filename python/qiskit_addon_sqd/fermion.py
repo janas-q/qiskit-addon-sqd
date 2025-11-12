@@ -329,6 +329,11 @@ def diagonalize_fermionic_hamiltonian(
         from devtools import debug
         # debug(bitstrings)
 
+        # dbg_ci_strs = bitstring_matrix_to_ci_strs(bitstrings)
+        # debug(dbg_ci_strs[0])
+        # debug(dbg_ci_strs[1])
+
+
         if len(bitstrings) > 9 * 10 ** 3:
             ci_strings = []
             # Diagonalize on single sample and classify the rest
@@ -385,7 +390,7 @@ def diagonalize_fermionic_hamiltonian(
                 nelec,
             )[0]
 
-            print(f"Trained on shape = {training_result.sci_state.amplitudes.shape}")
+            print(f"\nTraining on shape = {training_result.sci_state.amplitudes.shape}")
 
             # Call callback function if provided
             if callback is not None:
@@ -420,7 +425,7 @@ def diagonalize_fermionic_hamiltonian(
                 'val_fraction' : .1
             }
 
-            select_fraction = .1
+            select_fraction = .25
 
             # Derive amplitude cutoff to achieve target space dimension
             # Sort absolute amplitudes in descending order
@@ -464,17 +469,37 @@ def diagonalize_fermionic_hamiltonian(
                 model,
             )
 
-            labelled_bitstrings = training_bitstrings[labels.astype(bool)].astype(bool)
+            selection_size = int(
+                (1 - select_fraction)
+                * cartesian_amplitudes.shape[0] * cartesian_amplitudes.shape[1]
+            )
             inferred_bitstrings = bitstrings[classes.astype(bool)]
+            inferred_confidences = confidences[classes.astype(np.bool)]
+            inferred_conf_sort_idx = np.argsort(-inferred_confidences)
+            selected_idx = inferred_conf_sort_idx[:selection_size]
+            inferred_bitstrings = inferred_bitstrings[selected_idx]
+
+            labelled_bitstrings = training_bitstrings[labels.astype(bool)].astype(bool)
             selected_bitstrings = np.concatenate(
                 (labelled_bitstrings, inferred_bitstrings)
             )
 
-            # debug(selected_bitstrings)
+            debug(labelled_bitstrings)
+            debug(inferred_bitstrings)
+            debug(selected_bitstrings)
 
             ci_strings = [bitstring_matrix_to_ci_strs(selected_bitstrings)]
 
-            # debug(ci_strings)
+            debug(bitstring_matrix_to_ci_strs(labelled_bitstrings)[0])
+            debug(bitstring_matrix_to_ci_strs(inferred_bitstrings)[0])
+            debug(
+                np.unique(
+                    np.concatenate(
+                        [bitstring_matrix_to_ci_strs(labelled_bitstrings)[0],
+                         bitstring_matrix_to_ci_strs(inferred_bitstrings)[0]]
+                    )
+                )
+            )
 
             post_result = sci_solver(
                 ci_strings,
@@ -489,6 +514,7 @@ def diagonalize_fermionic_hamiltonian(
             current_result = post_result
             current_occupancies = current_result.orbital_occupancies
 
+            print(f"Shape after inference: {current_result.sci_state.amplitudes.shape}")
             # Call callback function if provided
             if callback is not None:
                 callback([current_result])
@@ -518,6 +544,9 @@ def diagonalize_fermionic_hamiltonian(
             else:
                 carryover_strings_a = carryover_strings_a[np.argsort(weights_a)[::-1]]
                 carryover_strings_b = carryover_strings_b[np.argsort(weights_b)[::-1]]
+
+            debug(carryover_strings_a)
+            # debug(carryover_strings_b)
 
         else:
         # if True:
@@ -715,6 +744,9 @@ def solve_sci(
     _, sci_vec = fci.selected_ci.kernel_fixed_space(
         myci, one_body_tensor, two_body_tensor, norb, nelec, ci_strs=ci_strings, **kwargs
     )
+    # _, sci_vec = fci.selected_ci.kernel_float_space(
+    #     myci, one_body_tensor, two_body_tensor, norb, nelec, ci_strs=ci_strings, **kwargs
+    # )
     # Calculate the average occupancy of each orbital
     dm1s = myci.make_rdm1s(sci_vec, norb, nelec)
     occupancies = (np.diagonal(dm1s[0]), np.diagonal(dm1s[1]))

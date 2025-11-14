@@ -37,6 +37,7 @@ from scipy import linalg as LA
 from .configuration_recovery import recover_configurations
 from .counts import bit_array_to_arrays, bitstring_matrix_to_integers
 from .subsampling import postselect_by_hamming_right_and_left, subsample
+from devtools import debug
 
 config.update("jax_enable_x64", True)  # To deal with large integers
 
@@ -46,16 +47,9 @@ class SCIState:
     """The amplitudes and determinants describing a quantum state."""
 
     amplitudes: np.ndarray
-    """An :math:`M \\times N` array where :math:`M =` len(``ci_strs_a``)
-    and :math:`N` = len(``ci_strs_b``). ``amplitudes[i][j]`` is the
-    amplitude of the determinant pair (``ci_strs_a[i]``, ``ci_strs_b[j]``).
-    """
 
-    ci_strs_a: np.ndarray
-    """The alpha determinants."""
-
-    ci_strs_b: np.ndarray
-    """The beta determinants."""
+    ci_strs: np.ndarray
+    """Determinants."""
 
     norb: int
     """The number of spatial orbitals."""
@@ -63,16 +57,16 @@ class SCIState:
     nelec: tuple[int, int]
     """The numbers of alpha and beta electrons."""
 
-    def __post_init__(self):
-        """Validate dimensions of inputs."""
-        object.__setattr__(
-            self, "amplitudes", np.asarray(self.amplitudes)
-        )  # Convert to ndarray if not already
-        if self.amplitudes.shape != (len(self.ci_strs_a), len(self.ci_strs_b)):
-            raise ValueError(
-                f"'amplitudes' shape must be ({len(self.ci_strs_a)}, {len(self.ci_strs_b)}) "
-                f"but got {self.amplitudes.shape}"
-            )
+    # def __post_init__(self):
+    #     """Validate dimensions of inputs."""
+    #     object.__setattr__(
+    #         self, "amplitudes", np.asarray(self.amplitudes)
+    #     )  # Convert to ndarray if not already
+    #     if self.amplitudes.shape != (len(self.ci_strs_a), len(self.ci_strs_b)):
+    #         raise ValueError(
+    #             f"'amplitudes' shape must be ({len(self.ci_strs_a)}, {len(self.ci_strs_b)}) "
+    #             f"but got {self.amplitudes.shape}"
+    #         )
 
     def save(self, filename):
         """Save the SCIState object to an .npz file."""
@@ -261,27 +255,40 @@ def diagonalize_fermionic_hamiltonian(
             f"electrons are equal. Instead, got {n_alpha} and {n_beta}."
         )
 
-    if max_dim is None:
-        max_dim_a = max_dim_b = None
-    elif isinstance(max_dim, tuple):
-        max_dim_a, max_dim_b = max_dim
-    else:
-        max_dim_a = max_dim_b = max_dim
-    if symmetrize_spin and max_dim_a != max_dim_b:
-        raise ValueError(
-            "When requesting spin symmetrization, the maximum dimension must be "
-            "the same for both spin alpha and spin beta. "
-            f"Instead, got {max_dim_a} and {max_dim_b}"
-        )
+    # if max_dim is None:
+    #     max_dim_a = max_dim_b = None
+    # elif isinstance(max_dim, tuple):
+    #     max_dim_a, max_dim_b = max_dim
+    # else:
+    #     max_dim_a = max_dim_b = max_dim
+    # if symmetrize_spin and max_dim_a != max_dim_b:
+    #     raise ValueError(
+    #         "When requesting spin symmetrization, the maximum dimension must be "
+    #         "the same for both spin alpha and spin beta. "
+    #         f"Instead, got {max_dim_a} and {max_dim_b}"
+    #     )
+
+    # if include_configurations is None:
+    #     include_a: list[int] | np.ndarray = np.array([], dtype=int)
+    #     include_b: list[int] | np.ndarray = np.array([], dtype=int)
+    # elif isinstance(include_configurations, tuple):
+    #     include_a, include_b = include_configurations
+    # else:
+    #     include_a = include_configurations
+    #     include_b = include_configurations
 
     if include_configurations is None:
-        include_a: list[int] | np.ndarray = np.array([], dtype=int)
-        include_b: list[int] | np.ndarray = np.array([], dtype=int)
+        carryover_strings = None
+        carryover_strings_a = np.array([], dtype=np.uint64)
+        carryover_strings_b = np.array([], dtype=np.uint64)
     elif isinstance(include_configurations, tuple):
-        include_a, include_b = include_configurations
+        carryover_strings_a, carryover_strings_b = include_configurations
+        carryover_strings = None
     else:
-        include_a = include_configurations
-        include_b = include_configurations
+        carryover_strings_a = include_configurations
+        carryover_strings_b = include_configurations
+        carryover_strings = None
+
 
     rng = np.random.default_rng(seed)
     current_occupancies = initial_occupancies
@@ -290,13 +297,25 @@ def diagonalize_fermionic_hamiltonian(
     if sci_solver is None:
         sci_solver = solve_sci_batch
 
-    include_a = np.unique(include_a)
-    include_b = np.unique(include_b)
-    carryover_strings_a = np.array([], dtype=np.int64)
-    carryover_strings_b = np.array([], dtype=np.int64)
+    # include_a = np.unique(include_a)
+    # include_b = np.unique(include_b)
+    # carryover_strings_a = np.array([], dtype=np.int64)
+    # carryover_strings_b = np.array([], dtype=np.int64)
+    # carryover_strings = None
 
     # Convert BitArray into bitstring and probability arrays
     raw_bitstrings, raw_probs = bit_array_to_arrays(bit_array)
+
+    ci_strings = [np.column_stack((carryover_strings_a, carryover_strings_b)).astype(np.uint64)]
+    hf_result = sci_solver(
+        ci_strings,
+        one_body_tensor,
+        two_body_tensor,
+        norb,
+        nelec
+    )[0]
+    ci0 = hf_result.sci_state.amplitudes
+    # debug(hf_result)
 
     # Run configuration recovery loop
     for _ in range(max_iterations):
@@ -332,42 +351,38 @@ def diagonalize_fermionic_hamiltonian(
         ci_strings = []
         for samples in subsamples:
             # Get the single-spin bitstrings and counts.
-            samples_a, counts_a = np.unique(
-                bitstring_matrix_to_integers(samples[:, norb:]), return_counts=True
-            )
-            samples_b, counts_b = np.unique(
-                bitstring_matrix_to_integers(samples[:, :norb]), return_counts=True
-            )
-            if symmetrize_spin:
-                # Merge the bitstrings for spin alpha and spin beta.
-                samples = np.concatenate((samples_a, samples_b))
-                counts = np.concatenate((counts_a, counts_b))
-                # Sort the single-spin bitstrings in descending order by marginal probability.
-                samples = samples[np.argsort(counts)[::-1]]
-                # Prioritize explicitly requested bitstrings, then carryover strings, and
-                # finally sampled bitstrings.
-                # Note that in this case, carryover_strings_a and carryover_strings_b are equal.
-                strs = np.concatenate((include_a, include_b, carryover_strings_a, samples))
-                # Truncate bitstrings to the maximum dimension.
-                # In this case, max_dim_a and max_dim_b are equal.
-                strs_a = strs_b = _unique_with_order_preserved(strs)[:max_dim_a]
-            else:
-                # Sort the single-spin bitstrings in descending order by marginal probability.
-                samples_a = samples_a[np.argsort(counts_a)[::-1]]
-                samples_b = samples_b[np.argsort(counts_b)[::-1]]
-                # Prioritize explicitly requested bitstrings, then carryover strings, and
-                # finally sampled bitstrings
-                strs_a = np.concatenate((include_a, carryover_strings_a, samples_a))
-                strs_b = np.concatenate((include_b, carryover_strings_b, samples_b))
-                # Truncate bitstrings to the maximum dimension.
-                strs_a = _unique_with_order_preserved(strs_a)[:max_dim_a]
-                strs_b = _unique_with_order_preserved(strs_b)[:max_dim_b]
-            strs_a.sort()
-            strs_b.sort()
-            ci_strings.append((strs_a, strs_b))
+            samples_a = bitstring_matrix_to_integers(samples[:, norb:])
+            samples_b = bitstring_matrix_to_integers(samples[:, :norb])
+            # if symmetrize_spin:
+            # else:
+            # Prioritize explicitly requested bitstrings, then carryover strings, and
+            # finally sampled bitstrings
+            if carryover_strings is not None:
+                carryover_strings_a = carryover_strings[:, 0]
+                carryover_strings_b = carryover_strings[:, 1]
+            # strs_a = np.concatenate((include_a, carryover_strings_a, samples_a))
+            # strs_b = np.concatenate((include_b, carryover_strings_b, samples_b))
+            strs_a = np.concatenate((carryover_strings_a, samples_a))
+            strs_b = np.concatenate((carryover_strings_b, samples_b))
+            # Truncate bitstrings to the maximum dimension.
+            strs_a = strs_a[:max_dim]
+            strs_b = strs_b[:max_dim]
+            ci_strs = np.column_stack((strs_a, strs_b)).astype(np.uint64)
+            # Remove samples that were already in carryovers
+            _, idx = np.unique(ci_strs, axis=0, return_index=True)
+            ci_strs = ci_strs[np.sort(idx)]
+            ci_strings.append(ci_strs)
+            # debug(ci_strs)
+
+        guess = np.zeros(len(ci_strs))
+        guess[:len(ci0)] = ci0
+        ci0 = guess
+        # debug(guess)
 
         # Run diagonalization
-        results = sci_solver(ci_strings, one_body_tensor, two_body_tensor, norb, nelec)
+        results = sci_solver(ci_strings, one_body_tensor, two_body_tensor, norb, nelec, ci0=ci0)
+
+        # debug(results)
 
         # Call callback function if provided
         if callback is not None:
@@ -381,45 +396,50 @@ def diagonalize_fermionic_hamiltonian(
             best_result = best_result_in_batch
 
         # Check convergence
-        if (
-            current_result is not None
-            and abs(current_result.energy - best_result_in_batch.energy) < energy_tol
-            and np.linalg.norm(
-                # Reason for type: ignore: mypy thinks current_occupancies can be None
-                np.ravel(current_occupancies) - np.ravel(best_result_in_batch.orbital_occupancies),  # type: ignore
-                ord=np.inf,
-            )
-            < occupancies_tol
-        ):
-            break
+        # if (
+        #     current_result is not None
+        #     and abs(current_result.energy - best_result_in_batch.energy) < energy_tol
+        #     and np.linalg.norm(
+        #         # Reason for type: ignore: mypy thinks current_occupancies can be None
+        #         np.ravel(current_occupancies) - np.ravel(best_result_in_batch.orbital_occupancies),  # type: ignore
+        #         ord=np.inf,
+        #     )
+        #     < occupancies_tol
+        # ):
+        #     break
         current_result = best_result_in_batch
         current_occupancies = current_result.orbital_occupancies
 
+        # debug(current_result.sci_state.amplitudes)
+
+
+        # Insert training and inference here
+
+
+
+
         # Carry over bitstrings with large CI weight
         sci_state = current_result.sci_state
-        flattened = sci_state.amplitudes.reshape(-1)
-        absolute_vals = np.abs(flattened)
-        indices = np.argsort(absolute_vals)
-        carryover_index = np.searchsorted(absolute_vals, carryover_threshold, sorter=indices)
-        carryover_indices = indices[carryover_index:]
-        _, n_strings_b = sci_state.amplitudes.shape
-        alpha_indices, beta_indices = np.divmod(carryover_indices, n_strings_b)
-        alpha_indices = np.unique(alpha_indices)
-        beta_indices = np.unique(beta_indices)
-        carryover_strings_a = sci_state.ci_strs_a[alpha_indices]
-        carryover_strings_b = sci_state.ci_strs_b[beta_indices]
+        absolute_vals = np.abs(sci_state.amplitudes)
+        carryover_indices = absolute_vals > carryover_threshold
+        # debug(carryover_indices)
+        ci0 = sci_state.amplitudes[carryover_indices]
+        carryover_strings = sci_state.ci_strs[carryover_indices]
         # Sort carryover strings in descending order by marginal weight
-        weights_a = np.sum(np.abs(sci_state.amplitudes[alpha_indices]) ** 2, axis=1)
-        weights_b = np.sum(np.abs(sci_state.amplitudes[:, beta_indices]) ** 2, axis=0)
-        if symmetrize_spin:
-            carryover_strings = np.concatenate((carryover_strings_a, carryover_strings_b))
-            weights = np.concatenate((weights_a, weights_b))
-            carryover_strings = carryover_strings[np.argsort(weights)[::-1]]
-            carryover_strings = _unique_with_order_preserved(carryover_strings)
-            carryover_strings_a = carryover_strings_b = carryover_strings
-        else:
-            carryover_strings_a = carryover_strings_a[np.argsort(weights_a)[::-1]]
-            carryover_strings_b = carryover_strings_b[np.argsort(weights_b)[::-1]]
+        weights = absolute_vals[carryover_indices]
+        # if symmetrize_spin:
+        #     carryover_strings = np.concatenate((carryover_strings_a, carryover_strings_b))
+        #     weights = np.concatenate((weights_a, weights_b))
+        #     carryover_strings = carryover_strings[np.argsort(weights)[::-1]]
+        #     carryover_strings = _unique_with_order_preserved(carryover_strings)
+        #     carryover_strings_a = carryover_strings_b = carryover_strings
+        # else:
+        #     carryover_strings_a = carryover_strings_a[np.argsort(weights_a)[::-1]]
+        #     carryover_strings_b = carryover_strings_b[np.argsort(weights_b)[::-1]]
+        carryover_strings = carryover_strings[np.argsort(weights)[::-1]]
+        ci0 = ci0[np.argsort(weights)[::-1]] / np.sqrt(np.sum(ci0**2))
+        debug(len(carryover_strings))
+        # debug(np.sum(ci0**2))
 
     # best_result is not None because there must have been at least one iteration
     return cast(SCIResult, best_result)
@@ -438,6 +458,7 @@ def solve_sci_batch(
     two_body_tensor: np.ndarray,
     norb: int,
     nelec: tuple[int, int],
+    ci0: np.ndarray | None = None,
     *,
     spin_sq: float | None = None,
     **kwargs,
@@ -467,6 +488,7 @@ def solve_sci_batch(
             norb=norb,
             nelec=nelec,
             spin_sq=spin_sq,
+            ci0=ci0,
             **kwargs,
         )
         for ci_strs in ci_strings
@@ -474,11 +496,12 @@ def solve_sci_batch(
 
 
 def solve_sci(
-    ci_strings: tuple[np.ndarray, np.ndarray],
+    ci_strings: np.ndarray,
     one_body_tensor: np.ndarray,
     two_body_tensor: np.ndarray,
     norb: int,
     nelec: tuple[int, int],
+    ci0: np.ndarray | None = None,
     *,
     spin_sq: float | None = None,
     **kwargs,
@@ -500,9 +523,12 @@ def solve_sci(
     Returns:
         The diagonalization result.
     """
-    norb, _ = one_body_tensor.shape
-
-    myci = fci.selected_ci.SelectedCI()
+    from pyscf.hci import (
+        SelectedCI,
+        myeig,
+        make_rdm12s
+    )
+    myci = SelectedCI()
     if spin_sq is not None:
         myci = fci.addons.fix_spin_(myci, ss=spin_sq)
 
@@ -510,23 +536,41 @@ def solve_sci(
     # the energy of the returned wavefunction when the spin^2 deviates
     # from the value requested. We will calculate the energy from the
     # RDMs below and ignore this value to be safe.
-    _, sci_vec = fci.selected_ci.kernel_fixed_space(
-        myci, one_body_tensor, two_body_tensor, norb, nelec, ci_strs=ci_strings, **kwargs
+    [_], [sci_vec] = myeig(
+        myci,
+        one_body_tensor,
+        two_body_tensor,
+        ci_strings,
+        norb,
+        nelec,
+        ci0=ci0,
+        float_tol=1e-9,
+        **kwargs
     )
+
+    # debug(_)
+
+    dm1s, dm2s = make_rdm12s(sci_vec, norb, nelec)
     # Calculate the average occupancy of each orbital
-    dm1s = myci.make_rdm1s(sci_vec, norb, nelec)
     occupancies = (np.diagonal(dm1s[0]), np.diagonal(dm1s[1]))
     # Calculate energy from RDMs
-    dm1 = myci.make_rdm1(sci_vec, norb, nelec)
-    dm2 = myci.make_rdm2(sci_vec, norb, nelec)
+    rdm1a, rdm1b = dm1s
+    dm1 = rdm1a + rdm1b
+    rdm2aa, rdm2ab, rdm2bb = dm2s
+    dm2 = rdm2aa
+    dm2 += rdm2bb
+    dm2 += rdm2ab
+    dm2 += rdm2ab.transpose(2,3,0,1)
     energy = np.einsum("pr,pr->", dm1, one_body_tensor) + 0.5 * np.einsum(
         "prqs,prqs->", dm2, two_body_tensor
     )
+
+    # debug(energy)
+
     # Construct SCIState
     sci_state = SCIState(
         amplitudes=np.array(sci_vec),
-        ci_strs_a=sci_vec._strs[0],
-        ci_strs_b=sci_vec._strs[1],
+        ci_strs=sci_vec._strs,
         norb=norb,
         nelec=nelec,
     )

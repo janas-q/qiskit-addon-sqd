@@ -227,8 +227,11 @@ def _bipartite_bitstring_correcting(
     # Normalize
     probs_left = np.absolute(probs_left)
     probs_right = np.absolute(probs_right)
-    probs_left = probs_left / np.sum(probs_left)
-    probs_right = probs_right / np.sum(probs_right)
+
+    if not np.allclose(probs_left, 0.0):
+        probs_left = probs_left / np.sum(probs_left)
+    if not np.allclose(probs_right, 0.0):
+        probs_right = probs_right / np.sum(probs_right)
 
     ######################## Handle LEFT bits ########################
 

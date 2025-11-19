@@ -35,9 +35,23 @@ from qiskit.primitives import BitArray
 from scipy import linalg as LA
 
 from .configuration_recovery import recover_configurations
-from .counts import bit_array_to_arrays, bitstring_matrix_to_integers
+from .counts import (
+    bit_array_to_arrays,
+    bitstring_matrix_to_integers,
+    integers_to_bitstring_matrix
+)
 from .subsampling import postselect_by_hamming_right_and_left, subsample
-from devtools import debug
+from bitpiq.classifier import models
+from bitpiq.classifier.training import (
+    train_model,
+    predict_batch,
+    split_data_tra_val
+)
+from pyscf.hci import (
+    SelectedCI,
+    myeig,
+    make_rdm12s
+)
 
 config.update("jax_enable_x64", True)  # To deal with large integers
 
@@ -68,56 +82,56 @@ class SCIState:
     #             f"but got {self.amplitudes.shape}"
     #         )
 
-    def save(self, filename):
-        """Save the SCIState object to an .npz file."""
-        np.savez(
-            filename,
-            amplitudes=self.amplitudes,
-            ci_strs_a=self.ci_strs_a,
-            ci_strs_b=self.ci_strs_b,
-            norb=self.norb,
-            nelec=self.nelec,
-        )
+    # def save(self, filename):
+    #     """Save the SCIState object to an .npz file."""
+    #     np.savez(
+    #         filename,
+    #         amplitudes=self.amplitudes,
+    #         ci_strs_a=self.ci_strs_a,
+    #         ci_strs_b=self.ci_strs_b,
+    #         norb=self.norb,
+    #         nelec=self.nelec,
+    #     )
 
-    @classmethod
-    def load(cls, filename):
-        """Load an SCIState object from an .npz file."""
-        with np.load(filename) as data:
-            return cls(
-                data["amplitudes"],
-                data["ci_strs_a"],
-                data["ci_strs_b"],
-                norb=data["norb"],
-                nelec=tuple(data["nelec"]),
-            )
+    # @classmethod
+    # def load(cls, filename):
+    #     """Load an SCIState object from an .npz file."""
+    #     with np.load(filename) as data:
+    #         return cls(
+    #             data["amplitudes"],
+    #             data["ci_strs_a"],
+    #             data["ci_strs_b"],
+    #             norb=data["norb"],
+    #             nelec=tuple(data["nelec"]),
+    #         )
 
-    def rdm(self, rank: int = 1, spin_summed: bool = False) -> np.ndarray:
-        """Compute reduced density matrix."""
-        # Reason for type: ignore: mypy can't tell the return type of the
-        # PySCF functions
-        sci_vector = _as_SCIvector(self.amplitudes, (self.ci_strs_a, self.ci_strs_b))
-        if rank == 1:
-            if spin_summed:
-                return make_rdm1(sci_vector, self.norb, self.nelec)  # type: ignore
-            return make_rdm1s(sci_vector, self.norb, self.nelec)  # type: ignore
-        if rank == 2:
-            if spin_summed:
-                return make_rdm2(sci_vector, self.norb, self.nelec)  # type: ignore
-            return make_rdm2s(sci_vector, self.norb, self.nelec)  # type: ignore
-        raise NotImplementedError(
-            f"Computing the rank {rank} reduced density matrix is currently not supported."
-        )
+    # def rdm(self, rank: int = 1, spin_summed: bool = False) -> np.ndarray:
+    #     """Compute reduced density matrix."""
+    #     # Reason for type: ignore: mypy can't tell the return type of the
+    #     # PySCF functions
+    #     sci_vector = _as_SCIvector(self.amplitudes, (self.ci_strs_a, self.ci_strs_b))
+    #     if rank == 1:
+    #         if spin_summed:
+    #             return make_rdm1(sci_vector, self.norb, self.nelec)  # type: ignore
+    #         return make_rdm1s(sci_vector, self.norb, self.nelec)  # type: ignore
+    #     if rank == 2:
+    #         if spin_summed:
+    #             return make_rdm2(sci_vector, self.norb, self.nelec)  # type: ignore
+    #         return make_rdm2s(sci_vector, self.norb, self.nelec)  # type: ignore
+    #     raise NotImplementedError(
+    #         f"Computing the rank {rank} reduced density matrix is currently not supported."
+    #     )
 
-    def spin_square(self) -> float:
-        """Return spin squared."""
-        sci_vector = _as_SCIvector(self.amplitudes, (self.ci_strs_a, self.ci_strs_b))
-        spin_squared, _ = spin_square(sci_vector, norb=self.norb, nelec=self.nelec)
-        return cast(float, spin_squared)
+    # def spin_square(self) -> float:
+    #     """Return spin squared."""
+    #     sci_vector = _as_SCIvector(self.amplitudes, (self.ci_strs_a, self.ci_strs_b))
+    #     spin_squared, _ = spin_square(sci_vector, norb=self.norb, nelec=self.nelec)
+    #     return cast(float, spin_squared)
 
-    def orbital_occupancies(self) -> tuple[np.ndarray, np.ndarray]:
-        """Average orbital occupancies."""
-        dm_a, dm_b = self.rdm(rank=1, spin_summed=False)
-        return np.diagonal(dm_a), np.diagonal(dm_b)
+    # def orbital_occupancies(self) -> tuple[np.ndarray, np.ndarray]:
+    #     """Average orbital occupancies."""
+    #     dm_a, dm_b = self.rdm(rank=1, spin_summed=False)
+    #     return np.diagonal(dm_a), np.diagonal(dm_b)
 
 
 @dataclass(frozen=True)
@@ -149,11 +163,11 @@ def diagonalize_fermionic_hamiltonian(
     nelec: tuple[int, int],
     *,
     num_batches: int = 1,
-    energy_tol: float = 1e-8,
-    occupancies_tol: float = 1e-5,
+    # energy_tol: float = 1e-8,
+    # occupancies_tol: float = 1e-5,
     max_iterations: int = 100,
     sci_solver: Callable[
-        [list[tuple[np.ndarray, np.ndarray]], np.ndarray, np.ndarray, int, tuple[int, int]],
+        [list[np.ndarray], np.ndarray, np.ndarray, int, tuple[int, int]],
         list[SCIResult],
     ]
     | None = None,
@@ -164,6 +178,7 @@ def diagonalize_fermionic_hamiltonian(
     carryover_threshold: float = 1e-4,
     callback: Callable[[list[SCIResult]], None] | None = None,
     seed: int | np.random.Generator | None = None,
+    enhance: bool = False
 ) -> SCIResult:
     """Run the sample-based quantum diagonalization (SQD) algorithm.
 
@@ -306,7 +321,11 @@ def diagonalize_fermionic_hamiltonian(
     # Convert BitArray into bitstring and probability arrays
     raw_bitstrings, raw_probs = bit_array_to_arrays(bit_array)
 
-    ci_strings = [np.column_stack((carryover_strings_a, carryover_strings_b)).astype(np.uint64)]
+    ci_strings = [
+        np.column_stack(
+            (carryover_strings_a, carryover_strings_b)
+        ).astype(np.uint64)
+    ]
     hf_result = sci_solver(
         ci_strings,
         one_body_tensor,
@@ -315,7 +334,6 @@ def diagonalize_fermionic_hamiltonian(
         nelec
     )[0]
     ci0 = hf_result.sci_state.amplitudes
-    # debug(hf_result)
 
     # Run configuration recovery loop
     for _ in range(max_iterations):
@@ -365,28 +383,35 @@ def diagonalize_fermionic_hamiltonian(
             strs_a = np.concatenate((carryover_strings_a, samples_a))
             strs_b = np.concatenate((carryover_strings_b, samples_b))
             # Truncate bitstrings to the maximum dimension.
-            strs_a = strs_a[:max_dim]
-            strs_b = strs_b[:max_dim]
+            # strs_a = strs_a[:max_dim]
+            # strs_b = strs_b[:max_dim]
             ci_strs = np.column_stack((strs_a, strs_b)).astype(np.uint64)
             # Remove samples that were already in carryovers
             _, idx = np.unique(ci_strs, axis=0, return_index=True)
             ci_strs = ci_strs[np.sort(idx)]
+            ci_strs = ci_strs[:max_dim]
             ci_strings.append(ci_strs)
-            # debug(ci_strs)
+
+        # from devtools import debug
+        # debug(len(ci_strs))
 
         guess = np.zeros(len(ci_strs))
         guess[:len(ci0)] = ci0
         ci0 = guess
-        # debug(guess)
 
         # Run diagonalization
-        results = sci_solver(ci_strings, one_body_tensor, two_body_tensor, norb, nelec, ci0=ci0)
-
-        # debug(results)
+        results = sci_solver(
+            ci_strings,
+            one_body_tensor,
+            two_body_tensor,
+            norb,
+            nelec,
+            ci0=ci0
+        )
 
         # Call callback function if provided
-        if callback is not None:
-            callback(results)
+        # if callback is not None:
+        #     callback(results)
 
         # Get best result from batch
         best_result_in_batch = min(results, key=lambda result: result.energy)
@@ -407,22 +432,156 @@ def diagonalize_fermionic_hamiltonian(
         #     < occupancies_tol
         # ):
         #     break
+
         current_result = best_result_in_batch
         current_occupancies = current_result.orbital_occupancies
 
-        # debug(current_result.sci_state.amplitudes)
+        # If there's enough data to train and infer on, run the classifier machinery.
+        if len(current_result.sci_state.amplitudes) > 9 * 10 ** 3 and enhance is True:
+            training_bitstrings_a = integers_to_bitstring_matrix(
+                current_result.sci_state.ci_strs[:, 0],
+                norb
+            )
+            training_bitstrings_b = integers_to_bitstring_matrix(
+                current_result.sci_state.ci_strs[:, 1],
+                norb
+            )
+            training_bitstrings = np.hstack(
+                (training_bitstrings_b, training_bitstrings_a)
+            )
+            training_amplitudes = np.abs(current_result.sci_state.amplitudes)
 
+            # MLP model definition
+            model_params = {
+                'bit_length' : norb * 2,
+                'hidden_dim' : 128,
+                'dropout_rate' : .1
+            }
+            model = models.SimpleMLPClassifier(
+                bit_length=model_params['bit_length'],
+                hidden_dim=model_params['hidden_dim'],
+                dropout_rate=model_params['dropout_rate']
+            )
+            model.name = "feed_forward"
+            training_params = {
+                'num_epochs' : 125,
+                'learning_rate' : 5e-4,
+                'batch_size' : 512,
+                'val_fraction' : .1
+            }
 
-        # Insert training and inference here
+            select_fraction = .5
 
+            # Derive amplitude cutoff to achieve target space dimension
+            # Sort absolute amplitudes in descending order
+            sorted_psaa = np.sort(
+                training_amplitudes
+            )[::-1]
+            threshold_amplitude_idx = int(
+                select_fraction * len(training_bitstrings)
+            )
 
+            cutoff = sorted_psaa[threshold_amplitude_idx]
+            print(f"Amplitude cutoff:\t{cutoff}")
 
+            # Derive labels
+            labels = (training_amplitudes > cutoff).astype(float) # ?? What would the right type be?
+            train_ds, val_ds, class_weights = split_data_tra_val(
+                training_bitstrings.astype(float),
+                labels,
+                training_params['val_fraction']
+            )
+
+            # Training
+            import jax
+            jax_rng = jax.random.PRNGKey(24)
+            state, _ = train_model(
+                model=model,
+                train_ds=train_ds,
+                val_ds=val_ds,
+                num_epochs=training_params['num_epochs'],
+                batch_size=training_params['batch_size'],
+                learning_rate=training_params['learning_rate'],
+                rng=jax_rng,
+                class_weights=class_weights,
+                save_training_history=False
+            )
+
+            # Inference
+            # Clean bitstrings from training set
+            # Convert rows to a structured type
+            dtype = np.dtype(
+                (np.void, bitstrings.dtype.itemsize * bitstrings.shape[1])
+            )
+
+            bs_view = bitstrings.view(dtype).ravel()
+            tbs_view = training_bitstrings.view(dtype).ravel()
+
+            # Boolean mask of rows in pool not in training
+            mask = ~np.isin(bs_view, tbs_view)
+
+            to_classify = bitstrings[mask]
+            # to_classify = bitstrings - training_bitstrings
+            # You are a fucking DOG
+            classes, confidences = predict_batch(
+                to_classify.astype(float),
+                state,
+                model,
+            )
+            selection_size = int(
+                (1 - select_fraction) * len(training_amplitudes)
+            )
+            inferred_bitstrings = to_classify[classes.astype(bool)]
+            inferred_confidences = confidences[classes.astype(np.bool)]
+            inferred_conf_sort_idx = np.argsort(-inferred_confidences)
+            selected_idx = inferred_conf_sort_idx[:selection_size]
+            inferred_bitstrings = inferred_bitstrings[selected_idx]
+            inferred_ci_strs_a = bitstring_matrix_to_integers(
+                inferred_bitstrings[:, norb:]
+            )
+            inferred_ci_strs_b = bitstring_matrix_to_integers(
+                inferred_bitstrings[:, :norb]
+            )
+            inferred_ci_strs = np.column_stack(
+                (inferred_ci_strs_a, inferred_ci_strs_b)
+            ).astype(np.uint64)
+
+            labelled_ci_strs = (
+                current_result.sci_state.ci_strs[labels.astype(bool)]
+            )
+
+            ci_strs = np.vstack(
+                (labelled_ci_strs, inferred_ci_strs)
+            )
+            ci_strings = [ci_strs]
+            debug(len(ci_strs))
+
+            ci0 = np.zeros(len(ci_strs))
+            ci0[:len(labelled_ci_strs)] = (
+                current_result.sci_state.amplitudes[labels.astype(bool)]
+            )
+            ci0 /= np.sqrt(np.sum(ci0 ** 2))
+
+            post_results = sci_solver(
+                ci_strings,
+                one_body_tensor,
+                two_body_tensor,
+                norb,
+                nelec,
+                ci0=ci0
+            )
+
+            current_result = post_results[0]
+            current_occupancies = current_result.orbital_occupancies
+
+        # Call callback function if provided
+        if callback is not None:
+            callback([current_result])
 
         # Carry over bitstrings with large CI weight
         sci_state = current_result.sci_state
         absolute_vals = np.abs(sci_state.amplitudes)
         carryover_indices = absolute_vals > carryover_threshold
-        # debug(carryover_indices)
         ci0 = sci_state.amplitudes[carryover_indices]
         carryover_strings = sci_state.ci_strs[carryover_indices]
         # Sort carryover strings in descending order by marginal weight
@@ -438,8 +597,6 @@ def diagonalize_fermionic_hamiltonian(
         #     carryover_strings_b = carryover_strings_b[np.argsort(weights_b)[::-1]]
         carryover_strings = carryover_strings[np.argsort(weights)[::-1]]
         ci0 = ci0[np.argsort(weights)[::-1]] / np.sqrt(np.sum(ci0**2))
-        debug(len(carryover_strings))
-        # debug(np.sum(ci0**2))
 
     # best_result is not None because there must have been at least one iteration
     return cast(SCIResult, best_result)
@@ -453,7 +610,7 @@ def _unique_with_order_preserved(vals: np.ndarray) -> np.ndarray:
 
 
 def solve_sci_batch(
-    ci_strings: list[tuple[np.ndarray, np.ndarray]],
+    ci_strings: list[np.ndarray],
     one_body_tensor: np.ndarray,
     two_body_tensor: np.ndarray,
     norb: int,
@@ -523,19 +680,10 @@ def solve_sci(
     Returns:
         The diagonalization result.
     """
-    from pyscf.hci import (
-        SelectedCI,
-        myeig,
-        make_rdm12s
-    )
     myci = SelectedCI()
-    if spin_sq is not None:
-        myci = fci.addons.fix_spin_(myci, ss=spin_sq)
+    # if spin_sq is not None:
+    #     myci = fci.addons.fix_spin_(myci, ss=spin_sq)
 
-    # The energy returned from this function is not guaranteed to be
-    # the energy of the returned wavefunction when the spin^2 deviates
-    # from the value requested. We will calculate the energy from the
-    # RDMs below and ignore this value to be safe.
     [_], [sci_vec] = myeig(
         myci,
         one_body_tensor,
@@ -547,8 +695,6 @@ def solve_sci(
         float_tol=1e-9,
         **kwargs
     )
-
-    # debug(_)
 
     dm1s, dm2s = make_rdm12s(sci_vec, norb, nelec)
     # Calculate the average occupancy of each orbital
@@ -564,8 +710,6 @@ def solve_sci(
     energy = np.einsum("pr,pr->", dm1, one_body_tensor) + 0.5 * np.einsum(
         "prqs,prqs->", dm2, two_body_tensor
     )
-
-    # debug(energy)
 
     # Construct SCIState
     sci_state = SCIState(

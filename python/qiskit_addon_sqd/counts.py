@@ -199,3 +199,37 @@ def bitstring_matrix_to_integers(bitstring_matrix: np.ndarray) -> np.ndarray:
         result += bitstring_matrix[:, i] * (1 << (n_bits - 1 - i))
 
     return result
+
+
+def integers_to_bitstring_matrix(integers, n_bits: int) -> np.ndarray:
+    """Inverse of bitstring_matrix_to_integers.
+
+    Args:
+        integers: sequence/ndarray of non-negative integers (can be numpy int dtype or Python ints)
+        n_bits: number of bits in each output bitstring row
+
+    Returns:
+        2D boolean array shape (len(integers), n_bits) where columns are ordered MSB->LSB.
+    """
+    ints = np.atleast_1d(np.asarray(integers))
+
+    if n_bits < 0:
+        raise ValueError("n_bits must be non-negative")
+
+    if ints.size == 0:
+        return np.zeros((0, n_bits), dtype=bool)
+
+    # For large bit counts or Python ints, fall back to Python loop (works for object dtype)
+    if ints.dtype == object or n_bits >= 64:
+        out = np.zeros((ints.shape[0], n_bits), dtype=bool)
+        for idx, val in enumerate(ints):
+            ival = int(val)
+            for i in range(n_bits):
+                out[idx, i] = bool((ival >> (n_bits - 1 - i)) & 1)
+        return out
+
+    # Fast vectorized path for native integer numpy dtypes and n_bits < 64
+    arr = ints.astype(np.uint64, copy=False)
+    shifts = np.arange(n_bits - 1, -1, -1, dtype=np.uint64)
+    bits = ((arr[:, None] >> shifts[None, :]) & 1).astype(bool)
+    return bits
